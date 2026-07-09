@@ -242,10 +242,12 @@ export default function Booth({ session, lang, onExit }) {
     }, 'image/png')
   }
 
-  const copyCode = () => {
-    navigator.clipboard?.writeText(roomCode)
+  // คัดลอกเป็นลิงก์จอยตรง เพื่อนกดแล้วเข้าห้องเลยไม่ต้องพิมพ์โค้ด
+  const copyLink = () => {
+    if (!roomCode) return
+    navigator.clipboard?.writeText(`${window.location.origin}/?room=${roomCode}`)
     setCopied(true)
-    setTimeout(() => setCopied(false), 1500)
+    setTimeout(() => setCopied(false), 1800)
   }
 
   if (status === 'error') {
@@ -284,9 +286,9 @@ export default function Booth({ session, lang, onExit }) {
             {roomInfo && (
               <span className="members-badge">👥 {roomInfo.count}/{roomInfo.max}</span>
             )}
-            <div className="room-badge" onClick={copyCode} title="copy">
+            <div className="room-badge" onClick={copyLink} title="copy invite link">
               {copied ? t.copied : (
-                <>{t.room}: <b>{roomCode || '…'}</b> 📋</>
+                <>{t.room}: <b>{roomCode || '…'}</b> 🔗</>
               )}
             </div>
           </div>
@@ -431,6 +433,9 @@ export default function Booth({ session, lang, onExit }) {
                       <p className="code-share">
                         {t.sendCodePre}<b>{roomCode || '…'}</b>{t.sendCodePost}
                       </p>
+                      <button className="share-btn" onClick={copyLink}>
+                        {copied ? t.copied : t.shareLink}
+                      </button>
                     </>
                   ) : (
                     <>
