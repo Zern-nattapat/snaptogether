@@ -1,0 +1,11 @@
+# Blueprint สำหรับ deploy บน Render (free tier)
+services:
+  - type: web
+    name: snaptogether
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
