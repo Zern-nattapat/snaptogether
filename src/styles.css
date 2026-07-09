@@ -488,6 +488,24 @@ button {
   letter-spacing: 0.2em;
 }
 
+/* ปุ่มคัดลอกลิงก์ชวนเพื่อน ในช่องรอเพื่อนเข้าห้อง */
+.share-btn {
+  margin: 10px auto 0;
+  background: linear-gradient(135deg, var(--primary), var(--secondary));
+  color: #fff;
+  font-family: inherit;
+  font-size: 0.92rem;
+  font-weight: 600;
+  padding: 10px 20px;
+  border-radius: 999px;
+  box-shadow: 0 6px 18px rgba(132, 94, 194, 0.45);
+  transition: transform 0.1s ease;
+}
+
+.share-btn:hover {
+  transform: translateY(-2px);
+}
+
 @keyframes pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.55; transform: scale(0.92); }
