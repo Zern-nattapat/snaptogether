@@ -6,7 +6,15 @@ import { STR } from './i18n.js'
 
 const SHOTS = 4
 const COUNTDOWN = 3
-const ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }]
+// STUN อย่างเดียวไม่พอสำหรับเน็ตมือถือ (CGNAT) — ต้องมี TURN relay เป็นทางสำรอง
+// ใช้ Open Relay ของ metered.ca (ฟรี, username/credential เป็นค่าสาธารณะของบริการ)
+const ICE_SERVERS = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+  { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+  { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
+]
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -47,6 +55,21 @@ export default function Booth({ session, lang, onExit }) {
   useEffect(() => {
     statusRef.current = status
   }, [status])
+
+  // iOS Safari บล็อก autoplay ของวิดีโอ/เสียง — ปลดล็อกด้วยการแตะหน้าจอครั้งแรกของผู้ใช้
+  useEffect(() => {
+    const unlock = () => {
+      document.querySelectorAll('.booth video, .booth audio').forEach((m) => {
+        if (m.paused) m.play().catch(() => {})
+      })
+    }
+    document.addEventListener('touchend', unlock)
+    document.addEventListener('click', unlock)
+    return () => {
+      document.removeEventListener('touchend', unlock)
+      document.removeEventListener('click', unlock)
+    }
+  }, [])
 
   const peerIds = Object.keys(remotePeers).sort()
   const canShoot = !isDuo || peerIds.length > 0
@@ -271,7 +294,10 @@ export default function Booth({ session, lang, onExit }) {
             key={id}
             autoPlay
             ref={(el) => {
-              if (el && el.srcObject !== s) el.srcObject = s
+              if (el && el.srcObject !== s) {
+                el.srcObject = s
+                el.play?.().catch(() => {})
+              }
             }}
           />
         ))}
@@ -403,6 +429,7 @@ export default function Booth({ session, lang, onExit }) {
                   // ผูก stream ใหม่ทุกครั้งที่ element ถูก mount (เช่น กลับมาจากหน้าแต่งรูป)
                   if (el && streamRef.current && el.srcObject !== streamRef.current) {
                     el.srcObject = streamRef.current
+                    el.play?.().catch(() => {})
                   }
                 }}
               />
@@ -417,7 +444,10 @@ export default function Booth({ session, lang, onExit }) {
                   style={{ filter: filter.css }}
                   ref={(el) => {
                     remoteVideoElsRef.current[id] = el
-                    if (el && el.srcObject !== remotePeers[id]) el.srcObject = remotePeers[id]
+                    if (el && el.srcObject !== remotePeers[id]) {
+                      el.srcObject = remotePeers[id]
+                      el.play?.().catch(() => {})
+                    }
                   }}
                 />
                 <span className="cam-tag">{t.friend} {i + 1}</span>
