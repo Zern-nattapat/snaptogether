@@ -537,15 +537,29 @@ export function composeStrip({ canvas, shots, theme, filter, frame, caption, sho
 
 // จับภาพนิ่งจาก <video> ณ ตอนนั้นเป็น canvas (mirror สำหรับกล้องตัวเอง)
 export function snapVideo(video, mirror = false) {
-  if (!video || !video.videoWidth) return null
+  if (!video) return null
+  let w = video.videoWidth
+  let h = video.videoHeight
+  if (!w || !h) {
+    // iOS Safari บางเวอร์ชันรายงาน videoWidth=0 สำหรับสตรีม WebRTC ของเพื่อน
+    // ทั้งที่ภาพแสดงปกติ — ดึงขนาดจริงจาก video track แทน
+    const track = video.srcObject?.getVideoTracks?.()[0]
+    const s = track?.getSettings?.() || {}
+    w = s.width || 640
+    h = s.height || 480
+  }
   const c = document.createElement('canvas')
-  c.width = video.videoWidth
-  c.height = video.videoHeight
+  c.width = w
+  c.height = h
   const ctx = c.getContext('2d')
   if (mirror) {
-    ctx.translate(c.width, 0)
+    ctx.translate(w, 0)
     ctx.scale(-1, 1)
   }
-  ctx.drawImage(video, 0, 0)
+  try {
+    ctx.drawImage(video, 0, 0, w, h)
+  } catch {
+    return null
+  }
   return c
 }
