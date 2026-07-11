@@ -18,6 +18,16 @@ const ICE_SERVERS = [
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
+// จับภาพนิ่งจาก <img> (ฟีดโหมดสำรองผ่านเซิร์ฟเวอร์) เป็น canvas
+function snapImg(img) {
+  if (!img || !img.complete || !img.naturalWidth) return null
+  const c = document.createElement('canvas')
+  c.width = img.naturalWidth
+  c.height = img.naturalHeight
+  c.getContext('2d').drawImage(img, 0, 0)
+  return c
+}
+
 export default function Booth({ session, lang, onExit }) {
   const { mode } = session
   const isDuo = mode !== 'solo'
@@ -25,10 +35,12 @@ export default function Booth({ session, lang, onExit }) {
 
   const localVideoRef = useRef(null)
   const remoteVideoElsRef = useRef({}) // peerId -> <video>
+  const frameImgElsRef = useRef({}) // peerId -> <img> (ฟีดโหมดสำรอง)
   const previewCanvasRef = useRef(null)
   const socketRef = useRef(null)
   const peersRef = useRef(new Map()) // peerId -> { pc, pending: [candidate] }
   const streamRef = useRef(null)
+  const frameTimerRef = useRef(null)
   const shootingRef = useRef(false)
   const statusRef = useRef('init')
 
@@ -38,6 +50,8 @@ export default function Booth({ session, lang, onExit }) {
   const [roomCode, setRoomCode] = useState(session.code || '')
   const [roomInfo, setRoomInfo] = useState(null) // { count, max }
   const [remotePeers, setRemotePeers] = useState({}) // peerId -> MediaStream
+  const [connStates, setConnStates] = useState({}) // peerId -> connectionState ของ WebRTC
+  const [frameFeeds, setFrameFeeds] = useState({}) // peerId -> dataURL เฟรมล่าสุด (โหมดสำรอง)
   const [micOn, setMicOn] = useState(true)
   const [count, setCount] = useState(null)
   const [flash, setFlash] = useState(false)
@@ -71,8 +85,10 @@ export default function Booth({ session, lang, onExit }) {
     }
   }, [])
 
-  const peerIds = Object.keys(remotePeers).sort()
-  const canShoot = !isDuo || peerIds.length > 0
+  // รายชื่อเพื่อนที่มีภาพให้แสดง: ผ่าน WebRTC หรือผ่านเฟรมสำรอง
+  const liveIds = [...new Set([...Object.keys(remotePeers), ...Object.keys(frameFeeds)])].sort()
+  const rtcOk = (id) => connStates[id] === 'connected' && remotePeers[id]
+  const canShoot = !isDuo || liveIds.some((id) => rtcOk(id) || frameFeeds[id])
 
   const runSequence = useCallback(async () => {
     if (shootingRef.current || statusRef.current === 'preview') return
@@ -91,13 +107,21 @@ export default function Booth({ session, lang, onExit }) {
       setCount(null)
       setFlash(true)
       // จับภาพตัวเองก่อน แล้วตามด้วยเพื่อนทุกคน (เรียงตาม id ให้ลำดับคงที่ทุกช็อต)
-      const ids = Object.keys(remoteVideoElsRef.current)
-        .filter((id) => remoteVideoElsRef.current[id])
-        .sort()
+      // เพื่อนแต่ละคนมาจาก <video> (WebRTC) หรือ <img> (เฟรมสำรองผ่านเซิร์ฟเวอร์)
+      const ids = [
+        ...new Set([
+          ...Object.keys(remoteVideoElsRef.current),
+          ...Object.keys(frameImgElsRef.current),
+        ]),
+      ].sort()
       taken.push({
         panels: [
           snapVideo(localVideoRef.current, true),
-          ...ids.map((id) => snapVideo(remoteVideoElsRef.current[id], false)),
+          ...ids.map(
+            (id) =>
+              snapVideo(remoteVideoElsRef.current[id], false) ||
+              snapImg(frameImgElsRef.current[id]),
+          ),
         ].filter(Boolean),
       })
       await sleep(160)
@@ -153,6 +177,9 @@ export default function Booth({ session, lang, onExit }) {
           setRemotePeers((prev) => ({ ...prev, [peerId]: e.streams[0] }))
           if (statusRef.current === 'waiting') setStatus('ready')
         }
+        entry.pc.onconnectionstatechange = () => {
+          setConnStates((prev) => ({ ...prev, [peerId]: entry.pc.connectionState }))
+        }
         if (initiator) {
           entry.pc
             .createOffer()
@@ -167,11 +194,16 @@ export default function Booth({ session, lang, onExit }) {
         peersRef.current.get(peerId)?.pc.close()
         peersRef.current.delete(peerId)
         delete remoteVideoElsRef.current[peerId]
-        setRemotePeers((prev) => {
-          const next = { ...prev }
-          delete next[peerId]
-          return next
-        })
+        delete frameImgElsRef.current[peerId]
+        const drop = (setter) =>
+          setter((prev) => {
+            const next = { ...prev }
+            delete next[peerId]
+            return next
+          })
+        drop(setRemotePeers)
+        drop(setConnStates)
+        drop(setFrameFeeds)
       }
 
       socket.on('connect_error', () => {
@@ -204,6 +236,36 @@ export default function Booth({ session, lang, onExit }) {
       socket.on('start', runSequence)
       socket.on('room-info', setRoomInfo)
       socket.on('peer-left', ({ id }) => removePeer(id))
+
+      // ---------- โหมดสำรอง: ส่งเฟรมภาพผ่านเซิร์ฟเวอร์เมื่อ WebRTC เชื่อมไม่ติด ----------
+      // (เช่น เน็ตมือถือหลัง CGNAT ที่ STUN เจาะไม่ได้และไม่มี TURN)
+      socket.on('frame', ({ from, data }) => {
+        setFrameFeeds((prev) => ({ ...prev, [from]: data }))
+        if (statusRef.current === 'waiting') setStatus('ready')
+      })
+
+      const capVideo = document.createElement('video')
+      capVideo.muted = true
+      capVideo.playsInline = true
+      capVideo.srcObject = stream
+      capVideo.play().catch(() => {})
+      const capCanvas = document.createElement('canvas')
+      frameTimerRef.current = setInterval(() => {
+        const entries = [...peersRef.current.values()]
+        // ส่งเฉพาะตอนที่ยังมีเพื่อนที่ WebRTC ไม่ connected
+        if (!entries.length || entries.every((en) => en.pc.connectionState === 'connected')) return
+        const set = stream.getVideoTracks()[0]?.getSettings?.() || {}
+        const vw = capVideo.videoWidth || set.width || 640
+        const vh = capVideo.videoHeight || set.height || 480
+        capCanvas.width = 320
+        capCanvas.height = Math.round((320 * vh) / vw)
+        try {
+          capCanvas.getContext('2d').drawImage(capVideo, 0, 0, capCanvas.width, capCanvas.height)
+          socket.emit('frame', capCanvas.toDataURL('image/jpeg', 0.55))
+        } catch {
+          /* เฟรมนี้พลาดก็ข้ามไป */
+        }
+      }, 200)
       socket.on('room-closed', () => {
         setError(t.errClosed)
         setStatus('error')
@@ -229,6 +291,7 @@ export default function Booth({ session, lang, onExit }) {
     setup()
     return () => {
       cancelled = true
+      clearInterval(frameTimerRef.current)
       streamRef.current?.getTracks().forEach((tr) => tr.stop())
       peersRef.current.forEach((entry) => entry.pc.close())
       peersRef.current.clear()
@@ -435,25 +498,41 @@ export default function Booth({ session, lang, onExit }) {
               />
               <span className="cam-tag">{t.you}</span>
             </div>
-            {peerIds.map((id, i) => (
+            {liveIds.map((id, i) => (
               <div className="cam" key={id}>
-                <video
-                  autoPlay
-                  playsInline
-                  muted
-                  style={{ filter: filter.css }}
-                  ref={(el) => {
-                    remoteVideoElsRef.current[id] = el
-                    if (el && el.srcObject !== remotePeers[id]) {
-                      el.srcObject = remotePeers[id]
-                      el.play?.().catch(() => {})
-                    }
-                  }}
-                />
+                {rtcOk(id) ? (
+                  <video
+                    autoPlay
+                    playsInline
+                    muted
+                    style={{ filter: filter.css }}
+                    ref={(el) => {
+                      remoteVideoElsRef.current[id] = el
+                      if (el && el.srcObject !== remotePeers[id]) {
+                        el.srcObject = remotePeers[id]
+                        el.play?.().catch(() => {})
+                      }
+                    }}
+                  />
+                ) : frameFeeds[id] ? (
+                  // โหมดสำรอง: แสดงเฟรมล่าสุดที่ส่งผ่านเซิร์ฟเวอร์
+                  <img
+                    alt=""
+                    src={frameFeeds[id]}
+                    style={{ width: '100%', height: '100%', objectFit: 'cover', filter: filter.css }}
+                    ref={(el) => {
+                      frameImgElsRef.current[id] = el
+                    }}
+                  />
+                ) : (
+                  <div className="cam-placeholder">
+                    <div className="pulse">📡</div>
+                  </div>
+                )}
                 <span className="cam-tag">{t.friend} {i + 1}</span>
               </div>
             ))}
-            {isDuo && peerIds.length === 0 && (
+            {isDuo && liveIds.length === 0 && (
               <div className="cam">
                 <div className="cam-placeholder">
                   {mode === 'host' ? (
