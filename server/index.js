@@ -80,6 +80,14 @@ io.on('connection', (socket) => {
     if (socket.data.code) socket.to(socket.data.code).emit('start')
   })
 
+  // โหมดสำรอง: relay เฟรมภาพ JPEG ผ่านเซิร์ฟเวอร์ เมื่อ WebRTC เชื่อมตรงกันไม่ได้ (เช่น เน็ตมือถือ)
+  // ใช้ volatile เพื่อทิ้งเฟรมที่ค้างคิว ไม่ให้ภาพหน่วงสะสม
+  socket.on('frame', (data) => {
+    if (typeof data === 'string' && data.length < 200000 && socket.data.code) {
+      socket.to(socket.data.code).volatile.emit('frame', { from: socket.id, data })
+    }
+  })
+
   socket.on('disconnect', () => {
     const code = socket.data.code
     const room = rooms.get(code)
